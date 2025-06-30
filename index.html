@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GPS Tracker PWA</title>
+    
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="manifest.json">
+    
+    <!-- Theme color for browser UI -->
+    <meta name="theme-color" content="#2c3e50">
+
+    <!-- Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Custom Font -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <style>
+        /* Custom styles */
+        body {
+            font-family: 'Inter', sans-serif;
+            -webkit-tap-highlight-color: transparent; /* Disable tap highlight on mobile */
+        }
+        .btn {
+            @apply w-full px-4 py-3 text-lg font-semibold text-white rounded-lg shadow-md transition-transform transform duration-150 ease-in-out;
+        }
+        .btn-start {
+            @apply bg-green-500 hover:bg-green-600 active:scale-95;
+        }
+        .btn-stop {
+            @apply bg-red-500 hover:bg-red-600 active:scale-95;
+        }
+        .btn-config {
+            @apply bg-gray-500 hover:bg-gray-600 active:scale-95;
+        }
+        .btn-export {
+             @apply px-4 py-2 text-sm bg-blue-500 text-white rounded-lg font-semibold hover:bg-blue-600 active:scale-95;
+        }
+        .btn-export:disabled {
+            @apply bg-blue-300 cursor-not-allowed hover:bg-blue-300;
+        }
+        .modal-overlay {
+            @apply fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center transition-opacity duration-300;
+        }
+        .modal-content {
+            @apply bg-white rounded-lg shadow-2xl p-6 w-11/12 max-w-md transform transition-transform duration-300 scale-95;
+        }
+        .fade-in {
+            @apply opacity-100;
+        }
+        .fade-out {
+            @apply opacity-0 pointer-events-none;
+        }
+        .scale-up {
+            @apply scale-100;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800">
+
+    <div class="container mx-auto max-w-lg p-4 min-h-screen flex flex-col">
+        <header class="text-center mb-6">
+            <h1 class="text-3xl font-bold text-gray-700">GPS Tracker</h1>
+            <p class="text-gray-500">A simple PWA for tracking your runs</p>
+        </header>
+
+        <main class="flex-grow">
+            <!-- Controls -->
+            <div class="bg-white p-5 rounded-lg shadow-lg mb-6">
+                <div class="mb-4">
+                    <label for="runName" class="block text-sm font-medium text-gray-600 mb-1">Run Name</label>
+                    <input type="text" id="runName" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="e.g., Morning Jog">
+                </div>
+                <div class="grid grid-cols-2 gap-4">
+                    <button id="startStopBtn" class="btn btn-start">Start</button>
+                    <button id="configBtn" class="btn btn-config">Config</button>
+                </div>
+                 <p id="status" class="text-center text-sm text-gray-500 mt-4 h-5"></p>
+            </div>
+
+            <!-- Saved Runs List -->
+            <div>
+                <div class="flex justify-between items-center mb-3">
+                    <h2 class="text-xl font-bold text-gray-700">Saved Runs</h2>
+                    <button id="exportBtn" class="btn-export">Export JSON</button>
+                </div>
+                <div id="runsList" class="space-y-3">
+                    <!-- Runs will be dynamically inserted here -->
+                    <p class="text-gray-500 text-center" id="noRunsMessage">No saved runs yet. Start a new run!</p>
+                </div>
+            </div>
+        </main>
+
+        <footer class="text-center text-xs text-gray-400 py-4">
+            <p>PWA GPS Tracker &copy; 2024</p>
+        </footer>
+    </div>
+
+    <!-- Configuration Modal -->
+    <div id="configModal" class="modal-overlay fade-out">
+        <div class="modal-content">
+            <h2 class="text-2xl font-bold mb-4">Configuration</h2>
+            <div class="mb-4">
+                <label for="measurementInterval" class="block text-sm font-medium text-gray-600 mb-1">Measurement Interval (seconds)</label>
+                <input type="number" id="measurementInterval" class="w-full px-3 py-2 border border-gray-300 rounded-lg" value="5">
+            </div>
+            <div class="mb-6">
+                <label for="recordingDuration" class="block text-sm font-medium text-gray-600 mb-1">Record for (seconds)</label>
+                <input type="number" id="recordingDuration" class="w-full px-3 py-2 border border-gray-300 rounded-lg" value="-1">
+                <p class="text-xs text-gray-500 mt-1">(-1 means record until 'Stop' is pressed)</p>
+            </div>
+            <div class="flex justify-end space-x-3">
+                <button id="cancelConfigBtn" class="px-4 py-2 bg-gray-200 rounded-lg font-semibold hover:bg-gray-300">Cancel</button>
+                <button id="saveConfigBtn" class="px-4 py-2 bg-blue-500 text-white rounded-lg font-semibold hover:bg-blue-600">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Message Modal for alerts -->
+    <div id="messageModal" class="modal-overlay fade-out">
+        <div class="modal-content text-center">
+            <p id="messageText" class="text-lg mb-6"></p>
+            <button id="messageOkBtn" class="px-6 py-2 bg-blue-500 text-white rounded-lg font-semibold hover:bg-blue-600">OK</button>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // --- PWA Service Worker Registration ---
+            if ('serviceWorker' in navigator) {
+                window.addEventListener('load', () => {
+                    navigator.serviceWorker.register('/sw.js')
+                        .then(registration => console.log('ServiceWorker registration successful with scope: ', registration.scope))
+                        .catch(err => console.log('ServiceWorker registration failed: ', err));
+                });
+            }
+
+            // --- UI Element References ---
+            const startStopBtn = document.getElementById('startStopBtn');
+            const configBtn = document.getElementById('configBtn');
+            const exportBtn = document.getElementById('exportBtn'); // New button
+            const runNameInput = document.getElementById('runName');
+            const runsList = document.getElementById('runsList');
+            const statusEl = document.getElementById('status');
+            const noRunsMessage = document.getElementById('noRunsMessage');
+
+            // Config Modal
+            const configModal = document.getElementById('configModal');
+            const intervalInput = document.getElementById('measurementInterval');
+            const durationInput = document.getElementById('recordingDuration');
+            const saveConfigBtn = document.getElementById('saveConfigBtn');
+            const cancelConfigBtn = document.getElementById('cancelConfigBtn');
+            
+            // Message Modal
+            const messageModal = document.getElementById('messageModal');
+            const messageText = document.getElementById('messageText');
+            const messageOkBtn = document.getElementById('messageOkBtn');
+
+            // --- State Variables ---
+            let db;
+            let isRecording = false;
+            let watchId = null;
+            let currentRunData = [];
+            let recordingTimerId = null;
+            let intervalTimerId = null;
+            let settings = {
+                interval: 5, // seconds
+                duration: -1, // seconds
+            };
+
+            // --- Custom Alert Function ---
+            function showMessage(message) {
+                messageText.textContent = message;
+                messageModal.classList.remove('fade-out');
+                messageModal.classList.add('fade-in');
+                messageModal.querySelector('.modal-content').classList.add('scale-up');
+            }
+
+            // --- Database Functions ---
+            function initDB() {
+                const request = indexedDB.open('gps_tracker_db', 2);
+
+                request.onerror = (event) => console.error("Database error:", event.target.errorCode);
+                
+                request.onupgradeneeded = (event) => {
+                    db = event.target.result;
+                    if (!db.objectStoreNames.contains('runs')) {
+                        db.createObjectStore('runs', { keyPath: 'id', autoIncrement: true });
+                    }
+                    if (!db.objectStoreNames.contains('settings')) {
+                        db.createObjectStore('settings', { keyPath: 'key' });
+                    }
+                };
+
+                request.onsuccess = (event) => {
+                    db = event.target.result;
+                    loadSettings();
+                    loadRuns();
+                };
+            }
+
+            function loadSettings() {
+                if (!db) return;
+                const transaction = db.transaction(['settings'], 'readonly');
+                const objectStore = transaction.objectStore('settings');
+                const request = objectStore.get('user_settings');
+                
+                request.onsuccess = (event) => {
+                    if (event.target.result) {
+                        settings = event.target.result.value;
+                        intervalInput.value = settings.interval;
+                        durationInput.value = settings.duration;
+                    }
+                };
+            }
+
+            function saveSettings() {
+                if (!db) return;
+                settings.interval = parseInt(intervalInput.value) || 5;
+                settings.duration = parseInt(durationInput.value) || -1;
+                
+                const transaction = db.transaction(['settings'], 'readwrite');
+                const objectStore = transaction.objectStore('settings');
+                objectStore.put({ key: 'user_settings', value: settings });
+
+                showMessage("Settings saved!");
+            }
+
+            async function getNextRunNumber() {
+                return new Promise((resolve, reject) => {
+                    if (!db) resolve(1);
+                    const transaction = db.transaction(['runs'], 'readonly');
+                    const objectStore = transaction.objectStore('runs');
+                    const request = objectStore.count();
+
+                    request.onsuccess = event => {
+                       resolve(event.target.result + 1);
+                    };
+                    request.onerror = event => reject("Error counting runs");
+                });
+            }
+
+            async function updateDefaultRunName() {
+                const runNumber = await getNextRunNumber();
+                runNameInput.value = `Run ${runNumber}`;
+            }
+
+            function loadRuns() {
+                if (!db) return;
+                const transaction = db.transaction(['runs'], 'readonly');
+                const objectStore = transaction.objectStore('runs');
+                const request = objectStore.getAll();
+
+                request.onsuccess = (event) => {
+                    const runs = event.target.result.reverse(); // Newest first
+                    renderRuns(runs);
+                    updateDefaultRunName();
+                };
+            }
+
+            function saveRun(runData) {
+                if (!db) return;
+                const transaction = db.transaction(['runs'], 'readwrite');
+                const objectStore = transaction.objectStore('runs');
+                const request = objectStore.add(runData);
+
+                request.onsuccess = () => {
+                    console.log("Run saved successfully");
+                    loadRuns(); // Refresh the list
+                };
+                request.onerror = (event) => console.error("Error saving run:", event.target.error);
+            }
+
+            // --- UI Rendering ---
+            function renderRuns(runs) {
+                runsList.innerHTML = '';
+                if (runs.length === 0) {
+                    noRunsMessage.style.display = 'block';
+                    exportBtn.disabled = true; // Disable export if no runs
+                } else {
+                    noRunsMessage.style.display = 'none';
+                    exportBtn.disabled = false; // Enable export if runs exist
+                    runs.forEach(run => {
+                        const duration = (run.endTime - run.startTime) / 1000;
+                        const card = document.createElement('div');
+                        card.className = 'bg-white p-4 rounded-lg shadow-md border-l-4 border-blue-500';
+                        card.innerHTML = `
+                            <div class="flex justify-between items-center">
+                                <h3 class="font-bold text-lg">${run.name}</h3>
+                                <span class="text-xs text-gray-500">${new Date(run.startTime).toLocaleDateString()}</span>
+                            </div>
+                            <div class="text-sm text-gray-600 mt-2">
+                                <p>Duration: ${Math.round(duration)} seconds</p>
+                                <p>Points captured: ${run.coords.length}</p>
+                            </div>
+                        `;
+                        runsList.appendChild(card);
+                    });
+                }
+            }
+
+
+            // --- Core Logic ---
+            function startRecording() {
+                navigator.geolocation.getCurrentPosition(
+                    (initialPosition) => {
+                        isRecording = true;
+                        currentRunData = {
+                            name: runNameInput.value.trim() || `Run`,
+                            startTime: new Date().getTime(),
+                            endTime: null,
+                            coords: []
+                        };
+                        
+                        startStopBtn.textContent = 'Stop';
+                        startStopBtn.classList.remove('btn-start');
+                        startStopBtn.classList.add('btn-stop');
+                        statusEl.textContent = 'Recording...';
+                        configBtn.disabled = true;
+                        runNameInput.disabled = true;
+
+                        const geoOptions = { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 };
+                        
+                        watchId = navigator.geolocation.watchPosition(
+                            (position) => { /* Live position, but we save on an interval */ },
+                            handleGeoError,
+                            geoOptions
+                        );
+                        
+                        intervalTimerId = setInterval(() => {
+                           navigator.geolocation.getCurrentPosition(position => {
+                                const pos = {
+                                    lat: position.coords.latitude,
+                                    lng: position.coords.longitude,
+                                    accuracy: position.coords.accuracy,
+                                    timestamp: position.timestamp
+                                };
+                                currentRunData.coords.push(pos);
+                                statusEl.textContent = `Recording... (${currentRunData.coords.length} points)`;
+                           }, handleGeoError, geoOptions);
+                        }, settings.interval * 1000);
+
+                        if (settings.duration > 0) {
+                            recordingTimerId = setTimeout(stopRecording, settings.duration * 1000);
+                        }
+                    },
+                    (error) => { handleGeoError(error); },
+                    { enableHighAccuracy: true }
+                );
+            }
+            
+            function stopRecording() {
+                if (!isRecording) return;
+                
+                isRecording = false;
+                if (watchId) navigator.geolocation.clearWatch(watchId);
+                if (recordingTimerId) clearTimeout(recordingTimerId);
+                if (intervalTimerId) clearInterval(intervalTimerId);
+
+                watchId = null; recordingTimerId = null; intervalTimerId = null;
+
+                currentRunData.endTime = new Date().getTime();
+                
+                if (currentRunData.coords.length > 0) {
+                     saveRun(currentRunData);
+                } else {
+                    showMessage("No GPS data was captured. Run not saved.");
+                }
+
+                startStopBtn.textContent = 'Start';
+                startStopBtn.classList.remove('btn-stop');
+                startStopBtn.classList.add('btn-start');
+                statusEl.textContent = '';
+                configBtn.disabled = false;
+                runNameInput.disabled = false;
+            }
+
+            function handleGeoError(error) {
+                let message = 'An unknown GPS error occurred.';
+                switch (error.code) {
+                    case error.PERMISSION_DENIED: message = "GPS access was denied. Please enable it in your browser settings."; break;
+                    case error.POSITION_UNAVAILABLE: message = "Location information is unavailable."; break;
+                    case error.TIMEOUT: message = "The request to get user location timed out."; break;
+                }
+                stopRecording();
+                showMessage(message);
+            }
+
+            function exportDataAsJSON() {
+                if (!db) {
+                    showMessage("Database not ready.");
+                    return;
+                }
+                const transaction = db.transaction(['runs'], 'readonly');
+                const objectStore = transaction.objectStore('runs');
+                const request = objectStore.getAll();
+
+                request.onsuccess = (event) => {
+                    const runs = event.target.result;
+                    if (runs.length === 0) {
+                        showMessage("No runs to export.");
+                        return;
+                    }
+
+                    const jsonString = JSON.stringify(runs, null, 2);
+                    const blob = new Blob([jsonString], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `gps_runs_${new Date().toISOString().slice(0,10)}.json`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                };
+
+                request.onerror = (event) => {
+                    showMessage("Failed to export data.");
+                    console.error("Export error:", event.target.error);
+                }
+            }
+            
+            // --- Event Listeners ---
+            startStopBtn.addEventListener('click', () => {
+                if (!isRecording) { startRecording(); } else { stopRecording(); }
+            });
+
+            configBtn.addEventListener('click', () => {
+                configModal.classList.remove('fade-out');
+                configModal.classList.add('fade-in');
+                configModal.querySelector('.modal-content').classList.add('scale-up');
+            });
+
+            exportBtn.addEventListener('click', exportDataAsJSON);
+
+            function closeConfigModal() {
+                 configModal.classList.remove('fade-in');
+                 configModal.classList.add('fade-out');
+                 configModal.querySelector('.modal-content').classList.remove('scale-up');
+            }
+            
+            saveConfigBtn.addEventListener('click', () => {
+                saveSettings();
+                closeConfigModal();
+            });
+            
+            cancelConfigBtn.addEventListener('click', closeConfigModal);
+            
+            messageOkBtn.addEventListener('click', () => {
+                messageModal.classList.remove('fade-in');
+                messageModal.classList.add('fade-out');
+                messageModal.querySelector('.modal-content').classList.remove('scale-up');
+            });
+            
+            // --- Initialisation ---
+            initDB();
+        });
+    </script>
+</body>
+</html>
